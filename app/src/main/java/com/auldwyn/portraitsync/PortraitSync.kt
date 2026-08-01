@@ -1,7 +1,10 @@
 package com.auldwyn.portraitsync
 
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
+import android.provider.MediaStore
 import androidx.documentfile.provider.DocumentFile
 import com.github.junrar.Archive as RarArchive
 import okhttp3.OkHttpClient
@@ -13,14 +16,15 @@ import java.io.File
 import java.io.IOException
 import java.util.zip.ZipInputStream
 
-/** Where extracted portraits get written. [Tree] goes through the SAF folder picker.
- * [ShizukuDirect] writes to a raw filesystem path via a Shizuku-hosted [IFileService]
- * running with shell privileges - needed for the NWN:EE Android/data folder, which
- * neither the SAF picker nor a normal app process (even with All Files Access) can
- * reach on Android 11+. */
+/** Where extracted portraits get written. [Tree] goes through the SAF folder picker
+ * for anyone who wants a specific destination (e.g. a rooted file manager pointed
+ * straight at NWN:EE's folder). [PublicDownloads] needs no setup at all - it lands
+ * files in the shared Downloads/AuldwynPortraits folder via MediaStore, since no
+ * app (not even with root-adjacent permissions) can write directly into another
+ * app's Android/data folder on Android 11+ without a privileged helper. */
 sealed class SyncDestination {
     data class Tree(val uri: Uri) : SyncDestination()
-    data class ShizukuDirect(val dir: File, val service: IFileService) : SyncDestination()
+    object PublicDownloads : SyncDestination()
 }
 
 private interface DestinationWriter {
@@ -45,24 +49,46 @@ private class TreeWriter(private val context: Context, uri: Uri) : DestinationWr
     }
 }
 
-private class ShizukuWriter(
-    private val dir: File,
-    private val service: IFileService
-) : DestinationWriter {
-    init {
-        if (!service.exists(dir.absolutePath) && !service.mkdirs(dir.absolutePath)) {
-            throw IOException("Could not create destination folder: ${dir.absolutePath}")
+private const val DOWNLOADS_RELATIVE_PATH = "Download/AuldwynPortraits/"
+
+private class PublicDownloadsWriter(private val context: Context) : DestinationWriter {
+    private val resolver = context.contentResolver
+
+    private fun findUri(filename: String): Uri? {
+        val projection = arrayOf(MediaStore.Downloads._ID)
+        val selection =
+            "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ?"
+        resolver.query(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            projection,
+            selection,
+            arrayOf(filename, DOWNLOADS_RELATIVE_PATH),
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID))
+                return ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
+            }
         }
+        return null
     }
 
     override fun readExisting(filename: String): ByteArray? {
-        val path = File(dir, filename).absolutePath
-        return if (service.exists(path)) service.readFile(path) else null
+        val uri = findUri(filename) ?: return null
+        return resolver.openInputStream(uri)?.use { it.readBytes() }
     }
 
     override fun write(filename: String, data: ByteArray) {
-        val path = File(dir, filename).absolutePath
-        if (!service.writeFile(path, data)) throw IOException("Could not write $filename")
+        findUri(filename)?.let { resolver.delete(it, null, null) }
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, filename)
+            put(MediaStore.Downloads.RELATIVE_PATH, DOWNLOADS_RELATIVE_PATH)
+            put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+        }
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("Could not create $filename")
+        resolver.openOutputStream(uri)?.use { it.write(data) }
+            ?: throw IOException("Could not open output stream for $filename")
     }
 }
 
@@ -87,7 +113,7 @@ object PortraitSync {
     fun sync(context: Context, destination: SyncDestination, log: (String) -> Unit): Int {
         val destDir: DestinationWriter = when (destination) {
             is SyncDestination.Tree -> TreeWriter(context, destination.uri)
-            is SyncDestination.ShizukuDirect -> ShizukuWriter(destination.dir, destination.service)
+            is SyncDestination.PublicDownloads -> PublicDownloadsWriter(context)
         }
 
         val url = toZipDownloadUrl(DROPBOX_SHARE_LINK)

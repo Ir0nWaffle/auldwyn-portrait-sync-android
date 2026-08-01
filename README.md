@@ -2,8 +2,9 @@
 
 Downloads player portraits from the Auldwyn Dropbox folder (including any
 nested inside `.zip`, `.7z`, or `.rar` files) and copies the `.tga` files
-into a folder you pick on your Android device. Tap a button whenever you
-want fresh portraits.
+into a plain `Download/AuldwynPortraits` folder on your phone — no setup,
+no permissions to grant, no folder to navigate to. Tap a button whenever
+you want fresh portraits.
 
 This is the Android counterpart to the
 [desktop Auldwyn Portrait Sync tool](https://github.com/Ir0nWaffle/auldwyn-portrait-sync) —
@@ -17,26 +18,24 @@ itself runs on Android.
 2. Since this isn't on the Play Store, Android will ask you to allow
    installing from this source the first time — approve that for your
    browser/file manager app.
-3. Install and open [Shizuku](https://shizuku.rikka.app/) (free, no root
-   required) and start it via its wireless-debugging pairing flow — this
-   is a one-time setup. See Shizuku's own in-app instructions.
-4. Open Auldwyn Portrait Sync, tap **NWN:EE Folder**, and grant it the
-   Shizuku permission when prompted. The destination is now set to
-   `Android/data/com.beamdog.nwnandroid/files/user/portraits` — the same
-   folder Beamdog's own instructions have players use for custom
-   portraits.
-5. Tap **Sync Now**. The destination is remembered for next time.
+3. Open the app and tap **Sync Now**. That's it — downloaded portraits
+   land in `Download/AuldwynPortraits`, visible in any file manager.
+4. Move the `.tga` files from there into NWN:EE's own folder:
+   `Android/data/com.beamdog.nwnandroid/files/user/portraits` (create the
+   `portraits` folder if it doesn't exist yet). This is the same folder
+   Beamdog's own instructions have players use for custom portraits.
+   The easiest way to do this move is to connect your phone to a
+   computer over USB and drag the files across — Android 11+ blocks
+   *every* app, including this one (and even apps with "All files
+   access" or Shizuku-style privilege escalation in some cases), from
+   writing directly into another app's `Android/data` folder, so this
+   one step can't be automated away. A file manager with root, or one
+   that explicitly supports browsing `Android/data`, works too if you
+   have one.
 
-Android 11+ blocks every app — including ones with "All files access" —
-from reading or writing another app's `Android/data` folder directly;
-that restriction can't be granted away via a normal permission dialog.
-Shizuku works around it by running the file write through a
-shell-privileged helper process instead of the app's own sandboxed
-process, which is exempt from that restriction. If you'd rather not use
-Shizuku, tap **Choose Folder...** instead and pick any other folder (this
-uses Android's normal folder picker) — you'll then need to move files
-from there into the NWN:EE folder yourself, e.g. via a computer over
-USB.
+If you'd rather point the app at a different folder than the default
+Downloads location (e.g. one your file manager already has special
+access to), tap **Choose Folder Instead...**.
 
 ## For the repo owner: how the build works
 

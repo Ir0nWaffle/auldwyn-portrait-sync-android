@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -36,16 +35,9 @@ import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 private const val PREFS_NAME = "portrait_sync"
 private const val PREF_DEST_URI = "dest_uri"
-private const val PREF_DEST_PATH = "dest_path"
-private const val NWN_PORTRAITS_RELATIVE_PATH =
-    "Android/data/com.beamdog.nwnandroid/files/user/portraits"
-
-private fun nwnPortraitsDir(): File =
-    File(Environment.getExternalStorageDirectory(), NWN_PORTRAITS_RELATIVE_PATH)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,22 +60,9 @@ fun AppRoot() {
     var destUri by remember {
         mutableStateOf(prefs.getString(PREF_DEST_URI, null)?.let { Uri.parse(it) })
     }
-    var destPath by remember {
-        mutableStateOf(prefs.getString(PREF_DEST_PATH, null)?.let { File(it) })
-    }
     var log by remember { mutableStateOf(listOf<String>()) }
     var syncing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-
-    fun useNwnFolder() {
-        val dir = nwnPortraitsDir()
-        destPath = dir
-        destUri = null
-        prefs.edit()
-            .putString(PREF_DEST_PATH, dir.absolutePath)
-            .remove(PREF_DEST_URI)
-            .apply()
-    }
 
     val pickFolder = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -94,53 +73,30 @@ fun AppRoot() {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
             destUri = uri
-            destPath = null
-            prefs.edit()
-                .putString(PREF_DEST_URI, uri.toString())
-                .remove(PREF_DEST_PATH)
-                .apply()
+            prefs.edit().putString(PREF_DEST_URI, uri.toString()).apply()
         }
     }
 
-    val destLabel = when {
-        destPath != null -> destPath!!.absolutePath
-        destUri != null -> DocumentFile.fromTreeUri(context, destUri!!)?.name ?: destUri.toString()
-        else -> "Not set"
-    }
+    val destLabel = destUri?.let { uri ->
+        DocumentFile.fromTreeUri(context, uri)?.name ?: uri.toString()
+    } ?: "Download/AuldwynPortraits (default, no setup needed)"
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("Destination folder:")
         Text(destLabel, modifier = Modifier.padding(vertical = 4.dp))
         Text(
-            "The system folder picker can't navigate into NWN:EE's own Android/data " +
-                "folder on Android 11+, and neither can All Files Access - that's an OS-level " +
-                "block on every app but NWN:EE itself. \"NWN:EE Folder\" below uses Shizuku " +
-                "instead: install the Shizuku app, start it once (wireless debugging pairing, " +
-                "no root), then tap this button.",
+            "Tap Sync Now - no setup required. Portraits land in a plain " +
+                "Download/AuldwynPortraits folder on your phone. Android won't let any app " +
+                "(this one included) write straight into NWN:EE's own folder, so the last " +
+                "step - moving those files into Android/data/com.beamdog.nwnandroid/files/" +
+                "user/portraits - is a one-time manual copy via a computer (see the README) " +
+                "or a file manager that can reach Android/data.",
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
         Row {
             Button(onClick = { pickFolder.launch(null) }) {
-                Text("Choose Folder...")
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            Button(onClick = {
-                if (!ShizukuFileAccess.isRunning) {
-                    log = log + "Shizuku isn't running. Install and start the Shizuku app " +
-                        "(pair it via wireless debugging in Developer options), then try again."
-                    return@Button
-                }
-                ShizukuFileAccess.requestPermission { granted ->
-                    if (granted) {
-                        useNwnFolder()
-                        log = log + "Shizuku access granted - destination set to the NWN:EE portraits folder."
-                    } else {
-                        log = log + "Shizuku permission was not granted."
-                    }
-                }
-            }) {
-                Text("NWN:EE Folder")
+                Text("Choose Folder Instead...")
             }
         }
 
@@ -148,18 +104,11 @@ fun AppRoot() {
             Button(
                 enabled = !syncing,
                 onClick = {
-                    if (destPath == null && destUri == null) {
-                        log = log + "Please choose a destination folder first."
-                        return@Button
-                    }
                     syncing = true
                     scope.launch {
                         try {
-                            val destination = if (destPath != null) {
-                                SyncDestination.ShizukuDirect(destPath!!, ShizukuFileAccess.bind())
-                            } else {
-                                SyncDestination.Tree(destUri!!)
-                            }
+                            val destination = destUri?.let { SyncDestination.Tree(it) }
+                                ?: SyncDestination.PublicDownloads
                             withContext(Dispatchers.IO) {
                                 PortraitSync.sync(context, destination) { msg ->
                                     log = log + msg
