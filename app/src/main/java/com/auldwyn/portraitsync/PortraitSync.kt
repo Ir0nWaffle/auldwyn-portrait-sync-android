@@ -13,12 +13,14 @@ import java.io.File
 import java.io.IOException
 import java.util.zip.ZipInputStream
 
-/** Where extracted portraits get written. [Tree] goes through the SAF folder picker;
- * [Direct] writes straight to a filesystem path (used for the NWN:EE Android/data
- * folder, which the SAF picker refuses to navigate into on Android 11+). */
+/** Where extracted portraits get written. [Tree] goes through the SAF folder picker.
+ * [ShizukuDirect] writes to a raw filesystem path via a Shizuku-hosted [IFileService]
+ * running with shell privileges - needed for the NWN:EE Android/data folder, which
+ * neither the SAF picker nor a normal app process (even with All Files Access) can
+ * reach on Android 11+. */
 sealed class SyncDestination {
     data class Tree(val uri: Uri) : SyncDestination()
-    data class Direct(val dir: File) : SyncDestination()
+    data class ShizukuDirect(val dir: File, val service: IFileService) : SyncDestination()
 }
 
 private interface DestinationWriter {
@@ -43,20 +45,24 @@ private class TreeWriter(private val context: Context, uri: Uri) : DestinationWr
     }
 }
 
-private class DirectWriter(private val dir: File) : DestinationWriter {
+private class ShizukuWriter(
+    private val dir: File,
+    private val service: IFileService
+) : DestinationWriter {
     init {
-        if (!dir.exists() && !dir.mkdirs()) {
+        if (!service.exists(dir.absolutePath) && !service.mkdirs(dir.absolutePath)) {
             throw IOException("Could not create destination folder: ${dir.absolutePath}")
         }
     }
 
     override fun readExisting(filename: String): ByteArray? {
-        val file = File(dir, filename)
-        return if (file.exists()) file.readBytes() else null
+        val path = File(dir, filename).absolutePath
+        return if (service.exists(path)) service.readFile(path) else null
     }
 
     override fun write(filename: String, data: ByteArray) {
-        File(dir, filename).writeBytes(data)
+        val path = File(dir, filename).absolutePath
+        if (!service.writeFile(path, data)) throw IOException("Could not write $filename")
     }
 }
 
@@ -81,7 +87,7 @@ object PortraitSync {
     fun sync(context: Context, destination: SyncDestination, log: (String) -> Unit): Int {
         val destDir: DestinationWriter = when (destination) {
             is SyncDestination.Tree -> TreeWriter(context, destination.uri)
-            is SyncDestination.Direct -> DirectWriter(destination.dir)
+            is SyncDestination.ShizukuDirect -> ShizukuWriter(destination.dir, destination.service)
         }
 
         val url = toZipDownloadUrl(DROPBOX_SHARE_LINK)

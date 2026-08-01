@@ -17,19 +17,26 @@ itself runs on Android.
 2. Since this isn't on the Play Store, Android will ask you to allow
    installing from this source the first time — approve that for your
    browser/file manager app.
-3. Open the app, tap **Choose Folder...**, and navigate to:
-   ```
-   Android/data/com.beamdog.nwnandroid/files/user/portraits
-   ```
-   (If it doesn't exist yet, create the `portraits` folder inside
-   `Android/data/com.beamdog.nwnandroid/files/user/`.) This is the same
-   folder Beamdog's own instructions have players use for custom portraits.
-4. Tap **Sync Now**. Your chosen folder is remembered for next time.
+3. Install and open [Shizuku](https://shizuku.rikka.app/) (free, no root
+   required) and start it via its wireless-debugging pairing flow — this
+   is a one-time setup. See Shizuku's own in-app instructions.
+4. Open Auldwyn Portrait Sync, tap **NWN:EE Folder**, and grant it the
+   Shizuku permission when prompted. The destination is now set to
+   `Android/data/com.beamdog.nwnandroid/files/user/portraits` — the same
+   folder Beamdog's own instructions have players use for custom
+   portraits.
+5. Tap **Sync Now**. The destination is remembered for next time.
 
-Android blocks apps from directly writing into another app's storage
-without you explicitly picking the folder each app is allowed to use —
-that's why step 3 is a one-time manual pick rather than something the app
-can do automatically.
+Android 11+ blocks every app — including ones with "All files access" —
+from reading or writing another app's `Android/data` folder directly;
+that restriction can't be granted away via a normal permission dialog.
+Shizuku works around it by running the file write through a
+shell-privileged helper process instead of the app's own sandboxed
+process, which is exempt from that restriction. If you'd rather not use
+Shizuku, tap **Choose Folder...** instead and pick any other folder (this
+uses Android's normal folder picker) — you'll then need to move files
+from there into the NWN:EE folder yourself, e.g. via a computer over
+USB.
 
 ## For the repo owner: how the build works
 

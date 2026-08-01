@@ -3,10 +3,8 @@ package com.auldwyn.portraitsync
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -48,9 +46,6 @@ private const val NWN_PORTRAITS_RELATIVE_PATH =
 
 private fun nwnPortraitsDir(): File =
     File(Environment.getExternalStorageDirectory(), NWN_PORTRAITS_RELATIVE_PATH)
-
-private fun hasAllFilesAccess(): Boolean =
-    Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -107,16 +102,6 @@ fun AppRoot() {
         }
     }
 
-    val requestAllFilesAccess = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        if (hasAllFilesAccess()) {
-            useNwnFolder()
-        } else {
-            log = log + "All files access was not granted, so the NWN:EE folder is still off-limits."
-        }
-    }
-
     val destLabel = when {
         destPath != null -> destPath!!.absolutePath
         destUri != null -> DocumentFile.fromTreeUri(context, destUri!!)?.name ?: destUri.toString()
@@ -128,8 +113,10 @@ fun AppRoot() {
         Text(destLabel, modifier = Modifier.padding(vertical = 4.dp))
         Text(
             "The system folder picker can't navigate into NWN:EE's own Android/data " +
-                "folder on Android 11+. Use \"NWN:EE Folder\" below instead - it writes " +
-                "there directly, after a one-time \"Allow all files access\" grant.",
+                "folder on Android 11+, and neither can All Files Access - that's an OS-level " +
+                "block on every app but NWN:EE itself. \"NWN:EE Folder\" below uses Shizuku " +
+                "instead: install the Shizuku app, start it once (wireless debugging pairing, " +
+                "no root), then tap this button.",
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
@@ -139,13 +126,18 @@ fun AppRoot() {
             }
             Spacer(modifier = Modifier.width(8.dp))
             Button(onClick = {
-                if (hasAllFilesAccess()) {
-                    useNwnFolder()
-                } else {
-                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                        data = Uri.parse("package:${context.packageName}")
+                if (!ShizukuFileAccess.isRunning) {
+                    log = log + "Shizuku isn't running. Install and start the Shizuku app " +
+                        "(pair it via wireless debugging in Developer options), then try again."
+                    return@Button
+                }
+                ShizukuFileAccess.requestPermission { granted ->
+                    if (granted) {
+                        useNwnFolder()
+                        log = log + "Shizuku access granted - destination set to the NWN:EE portraits folder."
+                    } else {
+                        log = log + "Shizuku permission was not granted."
                     }
-                    requestAllFilesAccess.launch(intent)
                 }
             }) {
                 Text("NWN:EE Folder")
@@ -156,18 +148,18 @@ fun AppRoot() {
             Button(
                 enabled = !syncing,
                 onClick = {
-                    val destination = when {
-                        destPath != null -> SyncDestination.Direct(destPath!!)
-                        destUri != null -> SyncDestination.Tree(destUri!!)
-                        else -> null
-                    }
-                    if (destination == null) {
+                    if (destPath == null && destUri == null) {
                         log = log + "Please choose a destination folder first."
                         return@Button
                     }
                     syncing = true
                     scope.launch {
                         try {
+                            val destination = if (destPath != null) {
+                                SyncDestination.ShizukuDirect(destPath!!, ShizukuFileAccess.bind())
+                            } else {
+                                SyncDestination.Tree(destUri!!)
+                            }
                             withContext(Dispatchers.IO) {
                                 PortraitSync.sync(context, destination) { msg ->
                                     log = log + msg
