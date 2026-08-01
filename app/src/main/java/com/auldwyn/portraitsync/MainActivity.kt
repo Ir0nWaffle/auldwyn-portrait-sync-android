@@ -3,7 +3,10 @@ package com.auldwyn.portraitsync
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -35,9 +38,19 @@ import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 private const val PREFS_NAME = "portrait_sync"
 private const val PREF_DEST_URI = "dest_uri"
+private const val PREF_DEST_PATH = "dest_path"
+private const val NWN_PORTRAITS_RELATIVE_PATH =
+    "Android/data/com.beamdog.nwnandroid/files/user/portraits"
+
+private fun nwnPortraitsDir(): File =
+    File(Environment.getExternalStorageDirectory(), NWN_PORTRAITS_RELATIVE_PATH)
+
+private fun hasAllFilesAccess(): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,9 +73,22 @@ fun AppRoot() {
     var destUri by remember {
         mutableStateOf(prefs.getString(PREF_DEST_URI, null)?.let { Uri.parse(it) })
     }
+    var destPath by remember {
+        mutableStateOf(prefs.getString(PREF_DEST_PATH, null)?.let { File(it) })
+    }
     var log by remember { mutableStateOf(listOf<String>()) }
     var syncing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    fun useNwnFolder() {
+        val dir = nwnPortraitsDir()
+        destPath = dir
+        destUri = null
+        prefs.edit()
+            .putString(PREF_DEST_PATH, dir.absolutePath)
+            .remove(PREF_DEST_URI)
+            .apply()
+    }
 
     val pickFolder = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -73,20 +99,37 @@ fun AppRoot() {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
             destUri = uri
-            prefs.edit().putString(PREF_DEST_URI, uri.toString()).apply()
+            destPath = null
+            prefs.edit()
+                .putString(PREF_DEST_URI, uri.toString())
+                .remove(PREF_DEST_PATH)
+                .apply()
         }
     }
 
-    val destLabel = destUri?.let { uri ->
-        DocumentFile.fromTreeUri(context, uri)?.name ?: uri.toString()
-    } ?: "Not set"
+    val requestAllFilesAccess = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (hasAllFilesAccess()) {
+            useNwnFolder()
+        } else {
+            log = log + "All files access was not granted, so the NWN:EE folder is still off-limits."
+        }
+    }
+
+    val destLabel = when {
+        destPath != null -> destPath!!.absolutePath
+        destUri != null -> DocumentFile.fromTreeUri(context, destUri!!)?.name ?: destUri.toString()
+        else -> "Not set"
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("Destination folder:")
         Text(destLabel, modifier = Modifier.padding(vertical = 4.dp))
         Text(
-            "Tip: navigate to Android/data/com.beamdog.nwnandroid/files/user/portraits " +
-                "to sync straight into NWN:EE.",
+            "The system folder picker can't navigate into NWN:EE's own Android/data " +
+                "folder on Android 11+. Use \"NWN:EE Folder\" below instead - it writes " +
+                "there directly, after a one-time \"Allow all files access\" grant.",
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
@@ -95,11 +138,30 @@ fun AppRoot() {
                 Text("Choose Folder...")
             }
             Spacer(modifier = Modifier.width(8.dp))
+            Button(onClick = {
+                if (hasAllFilesAccess()) {
+                    useNwnFolder()
+                } else {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = Uri.parse("package:${context.packageName}")
+                    }
+                    requestAllFilesAccess.launch(intent)
+                }
+            }) {
+                Text("NWN:EE Folder")
+            }
+        }
+
+        Row {
             Button(
                 enabled = !syncing,
                 onClick = {
-                    val dest = destUri
-                    if (dest == null) {
+                    val destination = when {
+                        destPath != null -> SyncDestination.Direct(destPath!!)
+                        destUri != null -> SyncDestination.Tree(destUri!!)
+                        else -> null
+                    }
+                    if (destination == null) {
                         log = log + "Please choose a destination folder first."
                         return@Button
                     }
@@ -107,7 +169,7 @@ fun AppRoot() {
                     scope.launch {
                         try {
                             withContext(Dispatchers.IO) {
-                                PortraitSync.sync(context, dest) { msg ->
+                                PortraitSync.sync(context, destination) { msg ->
                                     log = log + msg
                                 }
                             }

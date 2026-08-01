@@ -13,6 +13,53 @@ import java.io.File
 import java.io.IOException
 import java.util.zip.ZipInputStream
 
+/** Where extracted portraits get written. [Tree] goes through the SAF folder picker;
+ * [Direct] writes straight to a filesystem path (used for the NWN:EE Android/data
+ * folder, which the SAF picker refuses to navigate into on Android 11+). */
+sealed class SyncDestination {
+    data class Tree(val uri: Uri) : SyncDestination()
+    data class Direct(val dir: File) : SyncDestination()
+}
+
+private interface DestinationWriter {
+    fun readExisting(filename: String): ByteArray?
+    fun write(filename: String, data: ByteArray)
+}
+
+private class TreeWriter(private val context: Context, uri: Uri) : DestinationWriter {
+    private val dir = DocumentFile.fromTreeUri(context, uri)
+        ?: throw IOException("Could not open destination folder")
+
+    override fun readExisting(filename: String): ByteArray? {
+        val file = dir.findFile(filename) ?: return null
+        return context.contentResolver.openInputStream(file.uri)?.use { it.readBytes() }
+    }
+
+    override fun write(filename: String, data: ByteArray) {
+        dir.findFile(filename)?.delete()
+        val newFile = dir.createFile("application/octet-stream", filename)
+            ?: throw IOException("Could not create file $filename")
+        context.contentResolver.openOutputStream(newFile.uri)?.use { it.write(data) }
+    }
+}
+
+private class DirectWriter(private val dir: File) : DestinationWriter {
+    init {
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw IOException("Could not create destination folder: ${dir.absolutePath}")
+        }
+    }
+
+    override fun readExisting(filename: String): ByteArray? {
+        val file = File(dir, filename)
+        return if (file.exists()) file.readBytes() else null
+    }
+
+    override fun write(filename: String, data: ByteArray) {
+        File(dir, filename).writeBytes(data)
+    }
+}
+
 object PortraitSync {
 
     private const val DROPBOX_SHARE_LINK =
@@ -30,10 +77,12 @@ object PortraitSync {
     }
 
     /** Downloads the Dropbox folder and extracts every .tga file found anywhere
-     * inside it (including nested .zip/.7z/.rar archives) into destTreeUri. */
-    fun sync(context: Context, destTreeUri: Uri, log: (String) -> Unit): Int {
-        val destDir = DocumentFile.fromTreeUri(context, destTreeUri)
-            ?: throw IOException("Could not open destination folder")
+     * inside it (including nested .zip/.7z/.rar archives) into [destination]. */
+    fun sync(context: Context, destination: SyncDestination, log: (String) -> Unit): Int {
+        val destDir: DestinationWriter = when (destination) {
+            is SyncDestination.Tree -> TreeWriter(context, destination.uri)
+            is SyncDestination.Direct -> DirectWriter(destination.dir)
+        }
 
         val url = toZipDownloadUrl(DROPBOX_SHARE_LINK)
         log("Downloading from Dropbox...")
@@ -50,18 +99,12 @@ object PortraitSync {
 
             fun saveEntry(name: String, data: ByteArray) {
                 val filename = name.substringAfterLast('/').substringAfterLast('\\')
-                val existing = destDir.findFile(filename)
-                if (existing != null && existing.length() == data.size.toLong()) {
-                    val existingBytes = context.contentResolver.openInputStream(existing.uri)?.use { it.readBytes() }
-                    if (existingBytes != null && existingBytes.contentEquals(data)) {
-                        skipped++
-                        return
-                    }
-                    existing.delete()
+                val existingBytes = destDir.readExisting(filename)
+                if (existingBytes != null && existingBytes.contentEquals(data)) {
+                    skipped++
+                    return
                 }
-                val newFile = destDir.createFile("application/octet-stream", filename)
-                    ?: throw IOException("Could not create file $filename")
-                context.contentResolver.openOutputStream(newFile.uri)?.use { it.write(data) }
+                destDir.write(filename, data)
                 copied++
                 log("Saved: $filename")
             }
