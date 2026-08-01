@@ -1,0 +1,77 @@
+name: Build APK
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # If ANDROID_KEYSTORE_BASE64 isn't set as a repo secret yet, this
+      # generates a one-off keystore so the build still works, and uploads
+      # it as an artifact. Grab it from the run's artifacts and add its
+      # base64 + the passwords below as repo secrets so future releases are
+      # signed consistently (so Android treats updates as the same app
+      # instead of a conflicting install). See README for exact steps.
+      - name: Prepare signing keystore
+        run: |
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > keystore.jks
+            echo "KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret found -- generating a one-off keystore for this build. Download it from this run's artifacts and save it as repo secrets (see README) so future releases are signed consistently."
+            keytool -genkeypair -v -keystore keystore.jks -alias auldwyn -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass auldwyn123 -keypass auldwyn123 \
+              -dname "CN=Auldwyn, OU=Auldwyn, O=Auldwyn, L=Unknown, S=Unknown, C=US"
+            echo "KEYSTORE_PASSWORD=auldwyn123" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=auldwyn" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=auldwyn123" >> "$GITHUB_ENV"
+            cp keystore.jks keystore-SAVE-ME.jks
+          fi
+          echo "KEYSTORE_PATH=${{ github.workspace }}/keystore.jks" >> "$GITHUB_ENV"
+
+      - name: Upload one-off keystore (only exists if no secret was configured)
+        if: hashFiles('keystore-SAVE-ME.jks') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: SAVE-THIS-keystore
+          path: keystore-SAVE-ME.jks
+
+      - name: Build release APK
+        run: gradle assembleRelease --no-daemon
+
+      - name: Rename APK
+        run: mv app/build/outputs/apk/release/app-release.apk AuldwynPortraitSync.apk
+
+      - name: Upload build artifact (always, even without a tag)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AuldwynPortraitSync-android
+          path: AuldwynPortraitSync.apk
+
+      - name: Publish to a GitHub Release (only when a version tag is pushed)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: AuldwynPortraitSync.apk
+          generate_release_notes: true
