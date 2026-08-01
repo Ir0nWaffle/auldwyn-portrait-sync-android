@@ -101,7 +101,7 @@ object PortraitSync {
                             SevenZFile(tmp).use { sevenZ ->
                                 var entry = sevenZ.nextEntry
                                 while (entry != null) {
-                                    if (entry.hasStream && !entry.isDirectory) {
+                                    if (!entry.isDirectory) {
                                         val out = ByteArrayOutputStream()
                                         val buf = ByteArray(8192)
                                         while (true) {
